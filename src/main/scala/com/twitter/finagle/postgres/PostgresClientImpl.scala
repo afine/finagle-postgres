@@ -103,15 +103,17 @@ class PostgresClientImpl(
     _                   <- transactionalClient.query("BEGIN")
     result              <- fn(transactionalClient).rescue {
       case err => for {
-        _ <- transactionalClient.query("ROLLBACK")
-        _ <- constFactory.close()
-        _ <- service.close()
+        _ <- transactionalClient.query("ROLLBACK").ensure {
+          constFactory.close()
+          service.close()
+        }
         _ <- Future.exception(err)
       } yield null.asInstanceOf[T]
     }
-    _                   <- transactionalClient.query("COMMIT")
-    _                   <- constFactory.close()
-    _                   <- service.close()
+    _                   <- transactionalClient.query("COMMIT").ensure {
+      constFactory.close()
+      service.close()
+    }
   } yield result
 
   /*
