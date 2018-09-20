@@ -99,8 +99,8 @@ class PostgresClientImpl(
     service                  <- factory()
     constFactory             =  ServiceFactory.const(service)
     id                       =  Random.alphanumeric.take(28).mkString
-    closeTransaction         =  () => constFactory.close().ensure(service.close())
     transactionalClient      =  new PostgresClientImpl(constFactory, id, Some(types), receiveFunctions, binaryResults, binaryParams)
+    closeTransaction         =  () => transactionalClient.close().ensure(constFactory.close().ensure(service.close()))
     completeTransactionQuery =  (sql: String) => transactionalClient.query(sql).ensure(closeTransaction())
     _                        <- transactionalClient.query("BEGIN").onFailure(_ => closeTransaction())
     result                   <- fn(transactionalClient).rescue {
