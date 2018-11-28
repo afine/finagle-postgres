@@ -1,28 +1,20 @@
 package com.twitter.finagle.postgres.codec
 
-import java.net.{InetSocketAddress, SocketAddress}
-import java.nio.channels.ClosedChannelException
+import java.net.InetSocketAddress
 
 import com.twitter.finagle._
-import com.twitter.finagle.postgres.ResultSet
 import com.twitter.finagle.postgres.connection.{AuthenticationRequired, Connection, RequestingSsl, WrongStateForEvent}
 import com.twitter.finagle.postgres.messages._
 import com.twitter.finagle.postgres.values.Md5Encryptor
-import com.twitter.finagle.ssl.client.{ HostnameVerifier, SslClientConfiguration, SslClientEngineFactory, SslClientSessionVerifier }
+import com.twitter.finagle.ssl.Engine
+import com.twitter.finagle.ssl.client.{SslClientConfiguration, SslClientEngineFactory, SslClientSessionVerifier}
 import com.twitter.logging.Logger
-import com.twitter.util.{ Future, Try }
-import javax.net.ssl.{SSLContext, SSLEngine, SSLSession, TrustManagerFactory}
-
+import com.twitter.util.{Future, Try}
+import javax.net.ssl.{SSLContext, SSLSession}
 import org.jboss.netty.buffer.{ChannelBuffer, ChannelBuffers}
 import org.jboss.netty.channel._
 import org.jboss.netty.handler.codec.frame.FrameDecoder
-import org.jboss.netty.handler.ssl.util.InsecureTrustManagerFactory
-import org.jboss.netty.handler.ssl.{SslContext, SslHandler}
-import scala.collection.mutable
-
-import com.sun.corba.se.impl.protocol.RequestCanceledException
-import com.twitter.finagle.ssl.Ssl
-import com.twitter.finagle.transport.Transport
+import org.jboss.netty.handler.ssl.SslHandler
 
 /*
  * Filter that converts exceptions into ServerErrors.
@@ -218,7 +210,9 @@ class PgClientChannelHandler(
             val config = sslConfig.getOrElse(SslClientConfiguration(hostname = Some(i.getHostString)))
             (sslEngineFactory(address, config).self, (s: SSLSession) => sessionVerifier(address, config, s))
           case _ =>
-            (Ssl.client().self, (_: SSLSession) => true)
+            val ctx = SSLContext.getInstance("TLS")
+            ctx.init(null, null, null)
+            (new Engine(ctx.createSSLEngine()).self, (_: SSLSession) => true)
         }
 
         engine.setUseClientMode(true)
