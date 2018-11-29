@@ -95,7 +95,7 @@ class PostgresClientImpl(
    * Execute some actions inside of a transaction using a single connection
    */
   override def inTransaction[T](fn: PostgresClient => Future[T]): Future[T] = for {
-    types                    <- typeMap
+    types                    <- typeMap()
     service                  <- factory()
     constFactory             =  ServiceFactory.const(service)
     id                       =  Random.alphanumeric.take(28).mkString
@@ -177,7 +177,6 @@ class PostgresClientImpl(
 
   /**
     * Close the underlying connection pool and make this Client eternally down
-    *
     * @return
     */
   override def close(): Future[Unit] = {
