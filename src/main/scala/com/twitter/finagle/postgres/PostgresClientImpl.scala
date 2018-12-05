@@ -108,8 +108,7 @@ class PostgresClientImpl(
         _ <- completeTransactionQuery("ROLLBACK")
         _ <- Future.exception(err)
       } yield null.asInstanceOf[T]
-    }
-    _                        <- completeTransactionQuery("COMMIT")
+    }.flatMap(result => completeTransactionQuery("COMMIT").map(_ => result))
   } yield result
 
   /*
