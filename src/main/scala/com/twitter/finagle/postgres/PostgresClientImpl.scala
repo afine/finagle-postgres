@@ -21,17 +21,17 @@ import scala.util.Random
 
 
 class PostgresClientImpl(
-  factory: ServiceFactory[PgRequest, PgResponse],
-  id:String,
-  types: Option[Map[Int, PostgresClient.TypeSpecifier]] = None,
-  receiveFunctions: PartialFunction[String, ValueDecoder[T] forSome {type T}],
-  binaryResults: Boolean = false,
-  binaryParams: Boolean = false
-) extends PostgresClient {
+                          factory: ServiceFactory[PgRequest, PgResponse],
+                          id: String,
+                          types: Option[Map[Int, PostgresClient.TypeSpecifier]] = None,
+                          receiveFunctions: PartialFunction[String, ValueDecoder[T] forSome {type T}],
+                          binaryResults: Boolean = false,
+                          binaryParams: Boolean = false
+                        ) extends PostgresClient {
   private[this] val counter = new AtomicInteger(0)
   private[this] val logger = Logger(getClass.getName)
-  private val resultFormats = if(binaryResults) Seq(1) else Seq(0)
-  private val paramFormats = if(binaryParams) Seq(1) else Seq(0)
+  private val resultFormats = if (binaryResults) Seq(1) else Seq(0)
+  private val paramFormats = if (binaryParams) Seq(1) else Seq(0)
 
   val charset = StandardCharsets.UTF_8
 
@@ -63,10 +63,11 @@ class PostgresClientImpl(
       case SelectResult(fields, rows) =>
         val rowValues = ResultSet(fields, charset, rows, PostgresClient.defaultTypes, receiveFunctions).rows
         rowValues.map {
-          row => row.get[Int]("oid") -> PostgresClient.TypeSpecifier(
-            row.get[String]("typreceive"),
-            row.get[String]("type"),
-            row.get[Int]("typelem"))
+          row =>
+            row.get[Int]("oid") -> PostgresClient.TypeSpecifier(
+              row.get[String]("typreceive"),
+              row.get[String]("type"),
+              row.get[Int]("typelem"))
         }.toMap
     }
 
@@ -95,15 +96,29 @@ class PostgresClientImpl(
    * Execute some actions inside of a transaction using a single connection
    */
   override def inTransaction[T](fn: PostgresClient => Future[T]): Future[T] = for {
-    types                    <- typeMap()
-    service                  <- factory()
-    constFactory             =  ServiceFactory.const(service)
-    id                       =  Random.alphanumeric.take(28).mkString
-    transactionalClient      =  new PostgresClientImpl(constFactory, id, Some(types), receiveFunctions, binaryResults, binaryParams)
-    closeTransaction         =  () => transactionalClient.close().transform(_ => constFactory.close().transform(_ => service.close()))
-    completeTransactionQuery =  (sql: String) => transactionalClient.query(sql).transform {case x => closeTransaction().map(_ => x)}.lowerFromTry
-    _                        <- transactionalClient.query("BEGIN").rescue {case throwable: Throwable => closeTransaction().flatMap(_ => Future.exception(throwable))}
-    result                   <- fn(transactionalClient).rescue {
+    types <- typeMap()
+    service <- factory()
+    constFactory = ServiceFactory.const(service)
+    id = Random.alphanumeric.take(28).mkString
+    transactionalClient = new PostgresClientImpl(constFactory, id, Some(types), receiveFunctions, binaryResults, binaryParams)
+    closeTransaction = () => transactionalClient.close().flatMap(_ => constFactory.close()).flatMap(_ => service.close())
+    completeTransactionQuery = (sql: String) => transactionalClient.query(sql).transform {
+      case Return(response) => closeTransaction().map(_ => response)
+      case Throw(queryError) => closeTransaction().transform {
+        case Return(_) => Future.exception(queryError)
+        case Throw(closeTransactionThrow) =>
+          logger.error(closeTransactionThrow, "failed to close transaction")
+          Future.exception(queryError)
+      }
+    }
+    _ <- transactionalClient.query("BEGIN").rescue { case throwable => closeTransaction().transform {
+      case Return(_) => Future.exception(throwable)
+      case Throw(closeTransactionThrow) =>
+        logger.error(closeTransactionThrow, "failed to close transaction")
+        Future.exception(throwable)
+    }
+    }
+    result <- fn(transactionalClient).rescue {
       case err => for {
         _ <- completeTransactionQuery("ROLLBACK")
         _ <- Future.exception(err)
@@ -141,7 +156,7 @@ class PostgresClientImpl(
    * Run a single SELECT query and wrap the results with the provided function.
    */
   override def select[T](sql: String)(f: Row => T): Future[Seq[T]] = for {
-    types  <- typeMap()
+    types <- typeMap()
     result <- fetch(sql)
   } yield result match {
     case SelectResult(fields, rows) => ResultSet(fields, charset, rows, types, receiveFunctions).rows.map(f)
@@ -153,9 +168,9 @@ class PostgresClientImpl(
   override def prepareAndQuery[T](sql: String, params: Param[_]*)(f: Row => T): Future[Seq[T]] = {
     typeMap().flatMap { _ =>
       for {
-        service   <- factory()
+        service <- factory()
         statement = new PreparedStatementImpl("", sql, service)
-        result    <- statement.select(params: _*)(f)
+        result <- statement.select(params: _*)(f)
       } yield result
     }
   }
@@ -166,7 +181,7 @@ class PostgresClientImpl(
   override def prepareAndExecute(sql: String, params: Param[_]*): Future[Int] = {
     typeMap().flatMap { _ =>
       for {
-        service   <- factory()
+        service <- factory()
         statement = new PreparedStatementImpl("", sql, service)
         OK(count) <- statement.exec(params: _*)
       } yield count
@@ -176,6 +191,7 @@ class PostgresClientImpl(
 
   /**
     * Close the underlying connection pool and make this Client eternally down
+    *
     * @return
     */
   override def close(): Future[Unit] = {
@@ -183,14 +199,14 @@ class PostgresClientImpl(
   }
 
   /**
-   * The current availability [[Status]] of this client.
-   */
+    * The current availability [[Status]] of this client.
+    */
   override def status: Status = factory.status
 
   /**
-   * Determines whether this client is available (can accept requests
-   * with a reasonable likelihood of success).
-   */
+    * Determines whether this client is available (can accept requests
+    * with a reasonable likelihood of success).
+    */
   override def isAvailable: Boolean = status == Status.Open
 
   private[this] def sendQuery[T](sql: String)(handler: PartialFunction[PgResponse, Future[T]]) = {
@@ -199,30 +215,31 @@ class PostgresClientImpl(
 
 
   private[this] def send[T](
-    r: PgRequest,
-    optionalService: Option[Service[PgRequest, PgResponse]] = None)(
-    handler: PartialFunction[PgResponse, Future[T]]
-  ) = {
+                             r: PgRequest,
+                             optionalService: Option[Service[PgRequest, PgResponse]] = None)(
+                             handler: PartialFunction[PgResponse, Future[T]]
+                           ) = {
     val service = optionalService.getOrElse(factory.toService)
-    service(r).flatMap (handler orElse {
+    service(r).flatMap(handler orElse {
       case unexpected => Future.exception(new IllegalStateException(s"Unexpected response $unexpected"))
     })
   }
 
 
   private[this] class PreparedStatementImpl(
-    name: String,
-    sql: String,
-    service: Service[PgRequest, PgResponse]
-  ) extends PreparedStatement {
+                                             name: String,
+                                             sql: String,
+                                             service: Service[PgRequest, PgResponse]
+                                           ) extends PreparedStatement {
 
     def closeService = service.close()
 
     private[this] def parse(params: Param[_]*): Future[Unit] = {
       val paramTypes = encodeOids.map {
-        oidMap => params.map {
-          param => oidMap.getOrElse(param.encoder.typeName, 0)
-        }
+        oidMap =>
+          params.map {
+            param => oidMap.getOrElse(param.encoder.typeName, 0)
+          }
       }
       paramTypes.flatMap {
         types =>
@@ -234,7 +251,7 @@ class PostgresClientImpl(
     }
 
     private[this] def bind(params: Seq[ChannelBuffer]): Future[Unit] = {
-      val req =  Bind(
+      val req = Bind(
         portal = name,
         name = name,
         formats = paramFormats,
@@ -256,8 +273,8 @@ class PostgresClientImpl(
 
 
     private[this] def execute(
-      maxRows: Int = 0
-    ) = {
+                               maxRows: Int = 0
+                             ) = {
       val req = PgRequest(Execute(name, maxRows), flush = true)
       send(req, Some(service)) {
         case rep => Future.value(rep)
@@ -266,14 +283,14 @@ class PostgresClientImpl(
 
 
     private[this] def sync(
-      optionalService: Option[Service[PgRequest, PgResponse]] = None
-    ): Future[Unit] = send(PgRequest(Sync), optionalService) {
+                            optionalService: Option[Service[PgRequest, PgResponse]] = None
+                          ): Future[Unit] = send(PgRequest(Sync), optionalService) {
       case ReadyForQueryResponse => Future.value(())
     }
 
 
     override def fire(params: Param[_]*): Future[QueryResponse] = {
-      val paramBuffers = if(binaryParams) {
+      val paramBuffers = if (binaryParams) {
         params.map {
           p => p.encodeBinary(StandardCharsets.UTF_8)
         }
@@ -284,11 +301,11 @@ class PostgresClientImpl(
       }
 
       val f = for {
-        types  <- typeMap()
-        pname  <- parse(params: _*)
-        _      <- bind(paramBuffers)
+        types <- typeMap()
+        pname <- parse(params: _*)
+        _ <- bind(paramBuffers)
         fields <- describe()
-        exec   <- execute()
+        exec <- execute()
       } yield exec match {
         case CommandCompleteResponse(rows) => OK(rows)
         case Rows(rows, true) => ResultSet(fields, charset, rows, types, receiveFunctions)
@@ -306,13 +323,12 @@ class PostgresClientImpl(
 }
 
 
-
-
 case class Param[T](value: T)(implicit val encoder: ValueEncoder[T]) {
   def encodeText(charset: Charset = StandardCharsets.UTF_8) = ValueEncoder.encodeText(value, encoder, charset)
+
   def encodeBinary(charset: Charset = StandardCharsets.UTF_8) = ValueEncoder.encodeBinary(value, encoder, charset)
 }
 
 object Param {
-  implicit def convert[T : ValueEncoder](t: T): Param[T] = Param(t)
+  implicit def convert[T: ValueEncoder](t: T): Param[T] = Param(t)
 }
