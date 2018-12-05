@@ -100,9 +100,9 @@ class PostgresClientImpl(
     constFactory             =  ServiceFactory.const(service)
     id                       =  Random.alphanumeric.take(28).mkString
     transactionalClient      =  new PostgresClientImpl(constFactory, id, Some(types), receiveFunctions, binaryResults, binaryParams)
-    closeTransaction         =  () => transactionalClient.close().respond(_ => constFactory.close().respond(_ => service.close()))
+    closeTransaction         =  () => transactionalClient.close().transform(_ => constFactory.close().transform(_ => service.close()))
     completeTransactionQuery =  (sql: String) => transactionalClient.query(sql).transform {case x => closeTransaction().map(_ => x)}.lowerFromTry
-    _                        <- transactionalClient.query("BEGIN").rescue {case _ => closeTransaction()}
+    _                        <- transactionalClient.query("BEGIN").rescue {case throwable: Throwable => closeTransaction().flatMap(_ => Future.exception(throwable))}
     result                   <- fn(transactionalClient).rescue {
       case err => for {
         _ <- completeTransactionQuery("ROLLBACK")
